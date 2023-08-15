@@ -57,7 +57,12 @@ struct ACState
 
 float target;
 ACState::Enum state;
+bool pumpStatus;
 
+bool isWaterError;
+bool isWaterFull;
+float airTemp;
+float coolerTemp;
 
 void SetInFanSpeed(InFanSpeed::Enum speed)
 {
@@ -118,6 +123,11 @@ bool IsWaterFull(bool& hasError)
   const bool noIsFull = digitalRead(PIN_WATER_SENSOR_NO) == HIGH;
   const bool ncIsFull = digitalRead(PIN_WATER_SENSOR_NC) == LOW;
 
+  Serial.print("NoFull:     "); // for debug 
+  Serial.println(noIsFull);
+  Serial.print("NcFull:     "); // for debug 
+  Serial.println(ncIsFull);
+
   if(noIsFull == ncIsFull)
   {
     hasError = false;
@@ -132,85 +142,62 @@ bool IsWaterFull(bool& hasError)
 
 float ReadTempAir()
 {
-  constexpr float valAt27 = 437.;
+  constexpr float valAt26 = 517;
   constexpr int valAt39 = 717.;
   // pulldown resistor: 15k
   // We don't need a wide range of temperature, let's assume lineare transition in that range
   float in = analogRead(PIN_TEMP_SENSOR_AIR);
-  float temp = (in - valAt27) * 12.0 / (valAt39 - valAt27) + 27.0;
-  Serial.print("airTempRaw:  ");
+  float temp = (in - valAt26) * 13.0 / (valAt39 - valAt26) + 26.0;
+  Serial.print("airTempRaw:  "); // for debug and calibration
   Serial.println(in);
   return temp;
 }
 
 float ReadTempCooler()
 {
-  constexpr int valAt27 = 444.;
+  constexpr int valAt26 = 515.;
   constexpr int valAt39 = 717.;
   // pulldown resistor: 15k
   // We don't need a wide range of temperature, let's assume lineare transition in that range
-  float in = analogRead(PIN_TEMP_SENSOR_AIR);
-  float temp = (in - valAt27) * 12.0 / (valAt39 - valAt27) + 27.0;
-  Serial.print("coolerTempRaw: ");
+  float in = analogRead(PIN_TEMP_SENSOR_COOLER);
+  float temp = (in - valAt26) * 13.0 / (valAt39 - valAt26) + 26.0;
+  Serial.print("coolerTempRaw: "); // for debug and calibration
   Serial.println(in);
   return temp;
 }
 
-void setup() 
+void processState()
 {
-  SetCompressorStatus(false);
-  SetInFanSpeed(InFanSpeed::Off);  
-  SetOutFanSpeed(OutFanSpeed::Off);
-  SetPumpStatus(false);
-
-  // Disable stepper
-  digitalWrite(PIN_STEPER_1, LOW);
-  digitalWrite(PIN_STEPER_2, LOW);
-  digitalWrite(PIN_STEPER_3, LOW);
-  digitalWrite(PIN_STEPER_4, LOW);
-
-  target = 27.0;
-  state = ACState::Off;
-
-  Serial.begin(9600);
-}
-
-void loop() 
-{
-  bool isError;
-  const bool isWaterFull = IsWaterFull(isError);
-
-  const float airTemp = ReadTempAir();
-  const float coolerTemp = ReadTempCooler();
-
-  Serial.print("isError:     ");
-  Serial.println(isError);
-  Serial.print("isWaterFull: ");
-  Serial.println(isWaterFull);
-  Serial.print("airTemp:     ");
-  Serial.println(airTemp);
-  Serial.print("coolerTemp:  ");
-  Serial.println(coolerTemp);
-  Serial.print("State:       ");
   switch (state)
   {
   case ACState::Unfrosting:
-    Serial.println("Unfrosting");
+    SetOutFanSpeed(OutFanSpeed::Off);
+    SetInFanSpeed(InFanSpeed::High);
+    SetCompressorStatus(false);
     break;
   case ACState::Cooling:
-    Serial.println("Cooling");
+    SetOutFanSpeed(OutFanSpeed::High);
+    SetInFanSpeed(InFanSpeed::High);
+    SetCompressorStatus(true);
     break;
   case ACState::StandBy:
-    Serial.println("StandBy");
+    SetOutFanSpeed(OutFanSpeed::Off);
+    SetInFanSpeed(InFanSpeed::Low);
+    SetCompressorStatus(false);
     break;
   case ACState::Off:
-    Serial.println("Off");
+    SetOutFanSpeed(OutFanSpeed::Off);
+    SetInFanSpeed(InFanSpeed::Off);
+    SetCompressorStatus(false);
     break;
   }
 
+  SetPumpStatus(pumpStatus);
+}
 
+void UpdateState()
+{
   const float delta_temp = airTemp - target;
-  
 
   switch (state)
   {
@@ -253,30 +240,86 @@ void loop()
     }
     break;
   }
+}
 
+void updateSensor()
+{
+  isWaterFull = IsWaterFull(isWaterError);
+  airTemp = ReadTempAir();
+  coolerTemp = ReadTempCooler();
+}
+
+void updatePump()
+{
+  if(isWaterFull)
+  {
+    pumpStatus = true;
+  }
+  else
+  {
+    pumpStatus = false;
+  }
+
+  if(isWaterError)
+  {
+    state = ACState::Off;
+  }
+}
+
+void printLogs()
+{
+  Serial.print("isError:     ");
+  Serial.println(isWaterError);
+  Serial.print("isWaterFull: ");
+  Serial.println(isWaterFull);
+  Serial.print("airTemp:     ");
+  Serial.println(airTemp);
+  Serial.print("coolerTemp:  ");
+  Serial.println(coolerTemp);
+  Serial.print("State:       ");
   switch (state)
   {
   case ACState::Unfrosting:
-    SetOutFanSpeed(OutFanSpeed::Off);
-    SetInFanSpeed(InFanSpeed::High);
-    SetCompressorStatus(false);
+    Serial.println("Unfrosting");
     break;
   case ACState::Cooling:
-    SetOutFanSpeed(OutFanSpeed::High);
-    SetInFanSpeed(InFanSpeed::High);
-    SetCompressorStatus(true);
+    Serial.println("Cooling");
     break;
   case ACState::StandBy:
-    SetOutFanSpeed(OutFanSpeed::Off);
-    SetInFanSpeed(InFanSpeed::Low);
-    SetCompressorStatus(false);
+    Serial.println("StandBy");
     break;
   case ACState::Off:
-    SetOutFanSpeed(OutFanSpeed::Off);
-    SetInFanSpeed(InFanSpeed::Off);
-    SetCompressorStatus(false);
+    Serial.println("Off");
     break;
   }
+}
+
+void setup() 
+{
+  SetCompressorStatus(false);
+  SetInFanSpeed(InFanSpeed::Off);  
+  SetOutFanSpeed(OutFanSpeed::Off);
+  SetPumpStatus(false);
+
+  // Disable stepper
+  digitalWrite(PIN_STEPER_1, LOW);
+  digitalWrite(PIN_STEPER_2, LOW);
+  digitalWrite(PIN_STEPER_3, LOW);
+  digitalWrite(PIN_STEPER_4, LOW);
+
+  target = 30.0;
+  state = ACState::Off;
+
+  Serial.begin(9600);
+}
+
+void loop() 
+{
+  updateSensor();
+  printLogs();
+  UpdateState();
+  updatePump(); // update pump post state as it may reset it
+  //processState();  
 
   delay(1000);
 }
