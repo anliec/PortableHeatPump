@@ -64,6 +64,8 @@ bool isWaterFull;
 float airTemp;
 float coolerTemp;
 
+unsigned long lastPumpDisabledTime = 0;
+
 void SetInFanSpeed(InFanSpeed::Enum speed)
 {
   // Turn off everything to clean previous state
@@ -115,17 +117,21 @@ void SetCompressorStatus(bool isEnabled)
 
 void SetPumpStatus(bool isEnabled)
 {
+  if(!isEnabled)
+  {
+    lastPumpDisabledTime = millis();
+  }
   digitalWrite(PIN_PUMP, isEnabled ? HIGH : LOW);
 }
 
 bool IsWaterFull(bool& hasError)
 {
-  const bool noIsFull = digitalRead(PIN_WATER_SENSOR_NO) == HIGH;
+  const bool noIsFull = digitalRead(PIN_WATER_SENSOR_NO) == LOW;
   const bool ncIsFull = digitalRead(PIN_WATER_SENSOR_NC) == LOW;
 
-  Serial.print("NoFull:     "); // for debug 
+  Serial.print("NoFull:      "); // for debug 
   Serial.println(noIsFull);
-  Serial.print("NcFull:     "); // for debug 
+  Serial.print("NcFull:      "); // for debug 
   Serial.println(ncIsFull);
 
   if(noIsFull == ncIsFull)
@@ -142,12 +148,12 @@ bool IsWaterFull(bool& hasError)
 
 float ReadTempAir()
 {
-  constexpr float valAt26 = 517;
-  constexpr int valAt39 = 717.;
+  constexpr float valAt26 = 517.f;
+  constexpr float valAt39 = 717.f;
   // pulldown resistor: 15k
   // We don't need a wide range of temperature, let's assume lineare transition in that range
   float in = analogRead(PIN_TEMP_SENSOR_AIR);
-  float temp = (in - valAt26) * 13.0 / (valAt39 - valAt26) + 26.0;
+  float temp = (in - valAt26) * 13.0f / (valAt39 - valAt26) + 26.0f;
   Serial.print("airTempRaw:  "); // for debug and calibration
   Serial.println(in);
   return temp;
@@ -155,12 +161,12 @@ float ReadTempAir()
 
 float ReadTempCooler()
 {
-  constexpr int valAt26 = 515.;
-  constexpr int valAt39 = 717.;
+  constexpr float valAt26 = 515.f;
+  constexpr float valAt39 = 717.f;
   // pulldown resistor: 15k
   // We don't need a wide range of temperature, let's assume lineare transition in that range
   float in = analogRead(PIN_TEMP_SENSOR_COOLER);
-  float temp = (in - valAt26) * 13.0 / (valAt39 - valAt26) + 26.0;
+  float temp = (in - valAt26) * 13.0f / (valAt39 - valAt26) + 26.0f;
   Serial.print("coolerTempRaw: "); // for debug and calibration
   Serial.println(in);
   return temp;
@@ -251,13 +257,25 @@ void updateSensor()
 
 void updatePump()
 {
-  if(isWaterFull)
+  if(pumpStatus)
   {
-    pumpStatus = true;
+    if(!isWaterFull && millis() - lastPumpDisabledTime > 1000 * 15)
+    {
+      // run for at least 15 seconds
+      pumpStatus = false;
+    }
+    else if((millis() - lastPumpDisabledTime) > (1000 * 60 * 1))
+    {
+      // if we are not able to get the water out for 1 minute, stop the AC
+      state = ACState::Off;
+    }
   }
   else
   {
-    pumpStatus = false;
+    if(isWaterFull)
+    {
+      pumpStatus = true;
+    }
   }
 
   if(isWaterError)
@@ -292,6 +310,8 @@ void printLogs()
     Serial.println("Off");
     break;
   }
+  Serial.print("Pump:        ");
+  Serial.println(pumpStatus);
 }
 
 void setup() 
@@ -307,7 +327,7 @@ void setup()
   digitalWrite(PIN_STEPER_3, LOW);
   digitalWrite(PIN_STEPER_4, LOW);
 
-  target = 30.0;
+  target = 28.0;
   state = ACState::Off;
 
   Serial.begin(9600);
@@ -319,7 +339,7 @@ void loop()
   printLogs();
   UpdateState();
   updatePump(); // update pump post state as it may reset it
-  //processState();  
-
+  processState();  
+  
   delay(1000);
 }
